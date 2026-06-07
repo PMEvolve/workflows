@@ -1,0 +1,301 @@
+{
+  "name": "Dheeraj-SR-Analysis copy",
+  "nodes": [
+    {
+      "parameters": {
+        "url": "www.mysouce.com/getservicerequests",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "startDate",
+              "value": "={{ $now.minus({ weeks: 1 }).startOf('week').toISODate() }}"
+            },
+            {
+              "name": "endDate",
+              "value": "={{ $now.minus({ weeks: 1 }).endOf('week').toISODate() }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        720,
+        0
+      ],
+      "id": "f50cddf4-d3bd-4d30-99c9-480cc6969290",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1312,
+        0
+      ],
+      "id": "b8c65757-9fea-4c88-8031-52b4bc819139",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "=gpt-5.4-mini",
+          "mode": "id"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "={{ $json._prompt }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        1952,
+        208
+      ],
+      "id": "e8f5c27a-ea72-4cb4-9c1d-84973cc7519e",
+      "name": "Message a model",
+      "alwaysOutputData": false,
+      "credentials": {
+        "openAiApi": {
+          "id": "SXP9ZS4VfiM8N2by",
+          "name": "OpenAi account 6"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\n// Step 1: Group rows by NUMBER\nconst groups = {};\nconst order = []; // to preserve ticket order\n\nfor (const item of items) {\n  const row = item.json;\n  const num = row.NUMBER;\n\n  if (!groups[num]) {\n    groups[num] = [];\n    order.push(num);\n  }\n  groups[num].push(row);\n}\n\n// Step 2: For each group, sort comments by COMMENT_CREATED_ON asc, then merge\nreturn order.map(num => {\n  const rows = groups[num];\n\n  // Sort by COMMENT_CREATED_ON ascending\n  rows.sort((a, b) => {\n    const dateA = a.COMMENT_CREATED_ON ? new Date(a.COMMENT_CREATED_ON) : new Date(0);\n    const dateB = b.COMMENT_CREATED_ON ? new Date(b.COMMENT_CREATED_ON) : new Date(0);\n    return dateA - dateB;\n  });\n\n  // Take base fields from the first row\n  const base = { ...rows[0] };\n\n  // Merge comments in sorted order\n  base.COMMENT_TEXT = rows\n    .map(r => {\n      const author = r.COMMENT_CREATED_BY || 'Unknown';\n      const date = r.COMMENT_CREATED_ON || '';\n      const text = r.COMMENT_TEXT || '';\n      return `[${date}] ${author}: ${text}`;\n    })\n    .filter(c => c.trim() !== '[] :') // drop empty comments\n    .join('\\n---\\n');\n\n  return { json: base };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        992,
+        0
+      ],
+      "id": "8e5b0902-ca27-49c0-9dd6-ab6a16ff5ea5",
+      "name": "Merge comments"
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.item.json;\n\nconst prompt = `You are an expert support ticket analyst. Analyze the following service request and return a structured JSON response.\n\n## Service Request Data\n\n**Ticket Number:** ${row.NUMBER || ''}\n**Summary:** ${row.SUMMARY || ''}\n**Industry:** ${row.INDUSTRY || ''}\n**Description:** ${row.DESCRIPTION || ''}\n**Request Type:** ${row.U_REQUEST_TYPE || ''}\n**Customer Tier:** ${row.U_CUSTOMER_TIER || ''}\n**Customer Type:** ${row.U_CUSTOMER_TYPE || ''}\n**Customer Segment:** ${row.U_CUSTOMER_SEGMENT || ''}\n\n**Comments (chronological):**\n${row.COMMENT_TEXT || 'No comments available'}\n\n---\n\n## Instructions\n\nAnalyze ONLY the qualitative content above (summary, description, comments). Do NOT use any pre-existing categorization fields as input for your judgment.\n\nReturn a JSON object with exactly these fields:\n\n{\n  \"overall_summary\": \"A concise 4-5 sentence narrative covering: what the customer reported, what was investigated, what the root cause was, and how it was or is being resolved. Should read like a ticket handoff note.\",\n  \"customer_request_summary\": \"2-3 sentence plain English summary of what the customer is asking for or experiencing\",\n  \"root_cause_summary\": \"2-3 sentence summary of the root cause or reason behind this ticket\",\n  \"customer_trigger\": one of exactly: [\n    \"General enquiry\",\n    \"Feature not working\",\n    \"Failures showing up in analytics\",\n    \"Custom requirement\",\n    \"Data issue\",\n    \"Others\"\n  ],\n  \"sentiment\": one of exactly: [\"Positive\", \"Neutral\", \"Negative\", \"Frustrated\", \"Escalating\"],\n  \"product\": one of exactly: [\"Job pull\", \"HSI\", \"HSI 2way\", \"Employee pull\", \"Other integrations\"] job sync and job pull are same,\n  \"root_cause_category\": one of exactly: [\n    \"config issue(only if phenon settings are wrong during setup)\",\n    \"config updates(customer asked to update the existing config)\"\n    \"request for historical pull\",\n    \"platform issue IX\",\n    \"ATS issues(ATS did not send the data, or something wrong at ATS end)\",\n    \"category mapping\",\n    \"platform issue downstream(integrationw as successful but error at consumption by downstream)\",\n    \"job pull delete threshold\",\n    \"knowledge gap(customer do not understand this is how it should function)\",\n    \"customer enquiry\",\n    \"others\"\n  ]\n}\n\nRules:\n- Return ONLY the raw JSON object. No markdown, no code fences, no explanation.\n- If you cannot confidently determine the product or category, use \"Other integrations\" or \"others\" respectively.\n- For sentiment, judge based on the customer's tone and language across the comments thread — not the resolution outcome.\n- For customer_trigger, identify what initially prompted the customer to raise this ticket.\n- Base your judgment purely on the text content provided above.`;\n\nreturn {\n  json: {\n    ...row,\n    _prompt: prompt\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        208
+      ],
+      "id": "c4549364-ffdf-4ebf-b6eb-f81ec3238fa9",
+      "name": "Create prompt"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item.json;\n\n// Reach back to original ticket data from the Build Prompt node\nconst originalRow = $('Create prompt').item.json;\nconst { _prompt, ...cleanOriginal } = originalRow;\n\n// Strict null-safe error check\nconst hasError = item.error != null\n  && typeof item.error === 'object'\n  && (item.error.message || item.error.code || item.error.status);\n\nif (hasError) {\n  const errorMessage = item.error?.message?.toLowerCase() || '';\n  const errorCode = item.error?.code || item.error?.status;\n\n  const isRateLimit = errorMessage.includes('rate limit') || errorCode === 429;\n  const isTimeout = errorMessage.includes('timeout') || errorCode === 408;\n  const isServerError = Number(errorCode) >= 500;\n\n  let errorType = 'API_ERROR';\n  if (isRateLimit) errorType = 'RATE_LIMIT_RETRY';\n  if (isTimeout) errorType = 'TIMEOUT_RETRY';\n  if (isServerError) errorType = 'SERVER_ERROR_RETRY';\n\n  return {\n    json: {\n      ...cleanOriginal,\n      _had_error: true,\n      _error_type: errorType,\n      _error_message: item.error?.message || 'Unknown error',\n      _needs_retry: isRateLimit || isTimeout || isServerError,\n      ai_overall_summary: errorType,\n      ai_customer_request_summary: errorType,\n      ai_root_cause_summary: errorType,\n      ai_customer_trigger: 'Others',\n      ai_sentiment: 'Neutral',\n      ai_product: 'Other integrations',\n      ai_root_cause_category: 'others',\n      _parse_error: null\n    }\n  };\n}\n\n// No error — pass original ticket data + clean flags\nreturn {\n  json: {\n    ...cleanOriginal,\n    _had_error: false,\n    _error_type: null,\n    _error_message: null,\n    _needs_retry: false,\n    // Carry OpenAI output forward for parse node\n    output: item.output\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2304,
+        208
+      ],
+      "id": "f4ec1f19-613e-49f9-843f-1268cff5fe1e",
+      "name": "Error handler"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item.json;\n\n// Reach back to original ticket data from the Build Prompt node\nconst originalRow = $('Create prompt').item.json;\nconst { _prompt, ...cleanOriginal } = originalRow;\n\n// If error handler already flagged an API error, skip parsing\nif (item._had_error) {\n  return {\n    json: {\n      ...cleanOriginal,\n      ai_overall_summary: item.ai_overall_summary || item._error_type || 'API_ERROR',\n      ai_customer_request_summary: item.ai_customer_request_summary || item._error_type || 'API_ERROR',\n      ai_root_cause_summary: item.ai_root_cause_summary || item._error_type || 'API_ERROR',\n      ai_customer_trigger: 'Others',\n      ai_sentiment: 'Neutral',\n      ai_product: 'Other integrations',\n      ai_root_cause_category: 'others',\n      _had_error: true,\n      _error_type: item._error_type,\n      _error_message: item._error_message,\n      _needs_retry: item._needs_retry,\n      _parse_error: null\n    }\n  };\n}\n\n// --- Extract raw text from n8n OpenAI node response ---\n// Actual structure: item.output[0].content[0].text\nlet rawResponse = '';\n\nif (Array.isArray(item.output)) {\n  for (const block of item.output) {\n    // Try direct block.text first\n    if (block.text) {\n      rawResponse = block.text;\n      break;\n    }\n    // Try nested content array (n8n OpenAI node actual structure)\n    if (Array.isArray(block.content)) {\n      const contentBlock = block.content.find(c =>\n        c.type === 'output_text' || c.type === 'text'\n      );\n      if (contentBlock?.text) {\n        rawResponse = contentBlock.text;\n        break;\n      }\n    }\n  }\n}\n\n// Fallbacks for other possible response shapes\nif (!rawResponse) rawResponse = item.message?.content || '';\nif (!rawResponse) rawResponse = item.choices?.[0]?.message?.content || '';\nif (!rawResponse) rawResponse = item.text || '';\n\n// Unescape doubled quotes from n8n serialization (e.g. \"\" → \")\nrawResponse = rawResponse.replace(/\"\"/g, '\"').trim();\n\n// Strip markdown fences if present\nrawResponse = rawResponse.replace(/```json|```/gi, '').trim();\n\n// --- Handle empty response ---\nif (!rawResponse) {\n  return {\n    json: {\n      ...cleanOriginal,\n      ai_overall_summary: 'EMPTY_RESPONSE',\n      ai_customer_request_summary: 'EMPTY_RESPONSE',\n      ai_root_cause_summary: 'EMPTY_RESPONSE',\n      ai_customer_trigger: 'Others',\n      ai_sentiment: 'Neutral',\n      ai_product: 'Other integrations',\n      ai_root_cause_category: 'others',\n      _had_error: true,\n      _error_type: 'EMPTY_RESPONSE',\n      _error_message: 'OpenAI returned an empty response',\n      _needs_retry: true,\n      _parse_error: null\n    }\n  };\n}\n\n// --- Parse JSON ---\nlet analysis = {};\nlet parseError = null;\n\ntry {\n  analysis = JSON.parse(rawResponse);\n} catch (e) {\n  parseError = rawResponse;\n}\n\n// --- Handle parse failure ---\nif (parseError) {\n  return {\n    json: {\n      ...cleanOriginal,\n      ai_overall_summary: 'PARSE_ERROR',\n      ai_customer_request_summary: 'PARSE_ERROR',\n      ai_root_cause_summary: 'PARSE_ERROR',\n      ai_customer_trigger: 'Others',\n      ai_sentiment: 'Neutral',\n      ai_product: 'Other integrations',\n      ai_root_cause_category: 'others',\n      _had_error: true,\n      _error_type: 'PARSE_ERROR',\n      _error_message: 'Could not parse JSON from OpenAI response',\n      _needs_retry: true,\n      _parse_error: rawResponse\n    }\n  };\n}\n\n// --- Validate categorical fields against allowed values ---\nconst validProducts = ['Job pull', 'HSI', 'HSI 2way', 'Employee pull', 'Other integrations'];\nconst validCategories = [\n  'config issue',\n  'request for historical pull',\n  'platform issue IX',\n  'ATS issues(ATS did not send the data)',\n  'category mapping',\n  'platform issue downstream',\n  'job pull delete threshold',\n  'knowledge gap(customer do not understand this is how it should function)',\n  'customer enquiry',\n  'others'\n];\nconst validTriggers = [\n  'General enquiry',\n  'Feature not working',\n  'Failures showing up in analytics',\n  'Custom requirement',\n  'Data issue',\n  'Others'\n];\nconst validSentiments = ['Positive', 'Neutral', 'Negative', 'Frustrated', 'Escalating'];\n\nconst product = validProducts.includes(analysis.product)\n  ? analysis.product : 'Other integrations';\nconst rootCauseCategory = validCategories.includes(analysis.root_cause_category)\n  ? analysis.root_cause_category : 'others';\nconst customerTrigger = validTriggers.includes(analysis.customer_trigger)\n  ? analysis.customer_trigger : 'Others';\nconst sentiment = validSentiments.includes(analysis.sentiment)\n  ? analysis.sentiment : 'Neutral';\n\n// --- Merge AI output into original ticket row ---\nreturn {\n  json: {\n    ...cleanOriginal,\n    ai_overall_summary: analysis.overall_summary || '',\n    ai_customer_request_summary: analysis.customer_request_summary || '',\n    ai_root_cause_summary: analysis.root_cause_summary || '',\n    ai_customer_trigger: customerTrigger,\n    ai_sentiment: sentiment,\n    ai_product: product,\n    ai_root_cause_category: rootCauseCategory,\n    _had_error: false,\n    _error_type: null,\n    _error_message: null,\n    _needs_retry: false,\n    _parse_error: null\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2512,
+        208
+      ],
+      "id": "1af1b00f-3b5e-43ac-ab9a-cacbb7dd080a",
+      "name": "Response parser"
+    },
+    {
+      "parameters": {
+        "amount": 1
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2672,
+        208
+      ],
+      "id": "a1b1b414-d2cc-41b2-b09a-ea24351bbe8d",
+      "name": "Wait",
+      "webhookId": "4d8133c5-a0b6-48e4-8c5e-6666bc493c27"
+    },
+    {
+      "parameters": {
+        "path": "5bd24d99-5952-4df9-80ba-ff2e551605ef",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        416,
+        0
+      ],
+      "id": "9a369bd2-2814-4d5e-ab52-2216a6ab8f56",
+      "name": "Webhook",
+      "webhookId": "5bd24d99-5952-4df9-80ba-ff2e551605ef"
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1712,
+        -112
+      ],
+      "id": "2b6f161e-d08f-4b53-9ea2-08a2c4c74b04",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Merge comments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Error handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge comments": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create prompt": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error handler": {
+      "main": [
+        [
+          {
+            "node": "Response parser",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Response parser": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "d04b0afc-b74a-44da-9399-b8a918fd5785",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "a967cbd5bd5aad7c2567524b8f0b149fb6589e6bb59c264d10dfa3adfe6024f9"
+  },
+  "id": "uluBD3gTJbFLKsrf",
+  "tags": []
+}
